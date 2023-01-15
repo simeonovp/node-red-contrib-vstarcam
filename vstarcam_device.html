@@ -1,0 +1,108 @@
+<script type="text/javascript">
+  RED.nodes.registerType('vstarcam-device', {
+    category: 'Vstarcam',
+    color: '#7141d5',
+    defaults: {
+      name: {value:""},
+      deviceConfig: {value:"", type: "vstarcam-config"},
+      logDir: {value:""},
+      logPath: {value:""}
+    },          
+    inputs:1,
+    outputs:2,
+    icon: "device.png",
+    label: function() {
+      return this.name || "Vstarcam device";
+    },
+    oneditsave: function() {
+    }
+  });
+
+  RED.nodes.registerType('vstarcam-ftp', {
+    category: 'Vstarcam',
+    color: '#7141d5',
+    defaults: {
+      name: {value:""},
+      deviceConfig: {value:"", type: "vstarcam-config"},
+      ftpDir: {value:"/mnt/sda0/"},
+      logDir: {value:""},
+      logPath: {value:""}
+    },          
+    inputs:1,
+    outputs:2,
+    icon: "recording.png",
+    label: function() {
+      return this.name || "Vstarcam FTP";
+    },
+    oneditsave: function() {
+    }
+  });
+</script>
+
+<script type="text/html" data-template-name="vstarcam-device">
+  <div class="form-row">
+    <label for="node-input-deviceConfig"><i class="fa fa-cog"></i> Device</label>
+    <!-- Node-Red will replace this input element by a drop-down (with available Xmeye device configurations) -->
+    <input type="text" id="node-input-deviceConfig">
+  </div>
+  <br>
+  <div class="form-row">
+    <label for="node-input-logDir"><i class="icon-tag"></i> Log dir</label>
+    <input type="text" id="node-input-logDir" placeholder="/data/logs">
+  </div>
+  <br>
+  <div class="form-row">
+    <label for="node-input-logPath"><i class="icon-tag"></i> Log path</label>
+    <input type="text" id="node-input-logPath" placeholder="{device}/{year}/{month}/{day}/{filename}">
+  </div>
+  <br>
+  <div class="form-row">
+    <label for="node-input-name"><i class="icon-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="Name">
+  </div>
+</script>
+
+<script type="text/html" data-template-name="vstarcam-ftp">
+  <div class="form-row">
+    <label for="node-input-deviceConfig"><i class="fa fa-cog"></i> Device</label>
+    <!-- Node-Red will replace this input element by a drop-down (with available Xmeye device configurations) -->
+    <input type="text" id="node-input-deviceConfig">
+  </div>
+  <br>
+  <div class="form-row">
+    <label for="node-input-logDir"><i class="icon-tag"></i> Log dir</label>
+    <input type="text" id="node-input-logDir" placeholder="/data/logs">
+  </div>
+  <br>
+  <div class="form-row">
+    <label for="node-input-logPath"><i class="icon-tag"></i> Log path</label>
+    <input type="text" id="node-input-logPath" placeholder="{device}/{year}/{month}/{day}/{filename}">
+  </div>
+  <br>
+  <div class="form-row">
+    <label for="node-input-name"><i class="icon-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="Name">
+  </div>
+</script>
+
+<script type="text/html" data-help-name="vstarcam-device">
+  <p>A node to get extra information about an Vstarcam device using web access.</p>
+  <p><strong>Device:</strong><br/>
+  The target Vstarcam device.</p>
+  <p><strong>Log dir:</strong><br/>
+  The root directory used to store the downloaded records. When no path is selected, the default path: '/data/logs' will be used.</p>
+  <p><strong>Log path:</strong><br/>
+  The file path used to store the downloaded records. When no path is selected, the default path: '{device}/{year}/{month}/{day}/{filename}' will be used.</p>
+  </script>
+
+<script type="text/html" data-help-name="vstarcam-ftp">
+  <p>A node to get extra information about an Vstarcam device using web access.</p>
+  <p><strong>Device:</strong><br/>
+  The target Vstarcam device.</p>
+  <p><strong>Log dir:</strong><br/>
+  The directory path used to store the downloaded records. When no path is selected, the default path: '/data/logs' will be used.</p>
+  <p><strong>Log path:</strong><br/>
+  The file path used to store the downloaded records. When no path is selected, the default path: '{device}/{year}/{month}/{day}/{filename}' will be used.</p>
+  <p><strong>FTP dir:</strong><br/>
+  The root FTP directory on the device. When no path is selected, the default path: '/mnt/sda0/'' will be used.</p>
+</script>

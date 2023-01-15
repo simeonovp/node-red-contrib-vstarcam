@@ -1,0 +1,84 @@
+'use strict'
+const net = require('net');
+const {TelnetSocket} = require('telnet-stream'); //https://www.npmjs.com/package/telnet-stream
+
+class Telnet {
+  constructor({host, root_user, root_password, tn_port=23}, verb = 3, logger) {
+    this.user = root_user; // Exmpl. 'vstarcam2015', 'vstarcam2017'
+    this.password = root_password; // Exmpl. '20150602', '20170912'
+    this.verb = 3; // 1-err, 2-warn, 3-info, 4-debug, 5-trace
+
+    this.connected = false;
+    try {
+    this.socket = net.createConnection(tn_port, host);
+    }
+    catch(e) {
+      console.log('Telnet createConnection failed, error: ' + e);
+    }
+    this.tnSocket;
+
+    this.verb = verb; // 1-err, 2-warn, 3-info, 4-debug, 5-trace
+    this.logger = logger || console;
+    this.print = (str=>{ this.logger.log(str); }).bind(this);
+  }
+
+  onData(buffer) {
+    if (!this.tnSocket || !this.resolve) return;
+    const str = buffer.toString("utf8");
+    if (str.includes('login: ')) return this.tnSocket.write(this.user + '\n');
+    if (str.includes('Password: ')) return this.tnSocket.write(this.password + '\n');
+    if (str.includes('# ')) {
+      this.connected = true;
+      if (this.resolve) {
+        this.resolve();
+        this.resolve = null;
+      }
+    }
+  };
+
+  async connect() {
+    if (this.tnSocket && this.connected) return;
+    if (!this.user || !this.password) throw ('Invalide parameter');
+
+    if (!this.tnSocket) {
+      console.log('Telnet connect');
+      this.tnSocket = new TelnetSocket(this.socket);
+      this.tnSocket.on("close", () => this.disconnect.bind(this));
+      this.tnSocket.on("data", this.onData.bind(this));
+    }
+
+    return new Promise((resolve, reject) => {
+      this.resolve = resolve;
+    });
+  }
+
+  disconnect() {
+    try {
+      if (this.tnSocket && this.connected) {
+        console.log('Telnet disconnect');
+        this.tnSocket.write("exit\n");
+      }
+    }
+    catch(e) {
+      if (this.verb > 0) print(e);
+    }
+    this.resolve = null;
+    this.tnSocket = null;
+    this.connected = false;
+  }
+
+  async send(command) {
+    return new Promise((resolve, reject) => {
+      try {
+        this.tnSocket.write(command);
+        this.resolve = resolve;
+      }
+      catch(e) {
+        if (this.verb > 0) print(e);
+        reject(e);
+      }
+    });
+  }
+}
+
+module.exports = Telnet;

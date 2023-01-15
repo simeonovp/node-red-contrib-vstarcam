@@ -1,0 +1,364 @@
+'use strict'
+const fs = require('fs');
+const path = require('path');
+const http = require('http');
+const EventEmitter = require('events');
+
+// The Cgi class implements methods to access the camera over the Web interface
+class VstarcamCgi extends EventEmitter {
+  constructor({host, user, password, port=80}, verb = 3, logger) {
+    super();
+
+    this.host = host;
+    this.user = user;
+    this.password = password;
+    this.port = port;
+    this.ready = true;
+
+    this.verb = verb; // 1-err, 2-warn, 3-info, 4-debug, 5-trace
+    this.logger = logger || console;
+    this.print = (str=>{ this.logger.log(str); }).bind(this);
+  }
+
+  lock() {
+    this.ready = false;
+    this.emit('status', 'pending');
+  }
+  
+  unlock() {
+    this.ready = true;
+    this.emit('status', 'ready');
+  }
+
+  async get_request(path) {
+    if (!this.ready) return;
+    const options = {
+      host: this.host,
+      port: this.port,
+      path
+    };
+   
+    return new Promise((resolve, reject) => {
+      try {
+        this.lock();
+        //console.log(`-- request: ${options.host}:${options.port}/${options.path}`);
+        http.request(options, response=>{
+          let str = '';
+          response.on('data', chunk => { str += chunk; })
+            .on('end', () => {
+              this.unlock();
+              resolve(str);
+            })
+            .on('timeout', ()=>{
+              this.unlock();
+              reject('timeout');
+            })
+            .on('error', (e)=>{
+              // Source: https://github.com/nodejs/node/blob/master/lib/_http_outgoing.js#L248
+              this.unlock();
+              reject(e);
+            });            ;
+        }).end();
+      }
+      catch(e) {
+        this.unlock();
+        reject(e);
+      }
+    });
+  }
+
+  async get_request_bin(path) {
+    if (!this.ready) return;
+    const options = {
+      host: this.host,
+      port: this.port,
+      path
+    };
+   
+    return new Promise((resolve, reject) => {
+      try {
+        this.lock();
+        //console.log(`-- request: ${options.host}:${options.port}/${options.path}`);
+        http.request(options, response=>{
+          const chunks = [];
+          response.on('data', chunk => chunks.push(Buffer.from(chunk)))
+            .on('end', () => {
+              this.unlock();
+              resolve(Buffer.concat(chunks));
+            })
+            .on('timeout', ()=>{
+              this.unlock();
+              reject('timeout');
+            })
+            .on('error', (e)=>{
+              // Source: https://github.com/nodejs/node/blob/master/lib/_http_outgoing.js#L248
+              this.unlock();
+              reject(e);
+            });
+        }).end();
+      }
+      catch(e) {
+        this.unlock();
+        reject(e);
+      }
+    });
+  }
+
+  async command(cmd, argv) {
+    if (this.verb > 3) this.print('command(%s)' % cmd);
+    const login = 'loginuse=' + this.user + '&loginpas=' + this.password;
+    let path = '/' + cmd + '.cgi?';
+    if (argv) {
+      for (let arg in argv) {
+        path += `${arg}=${argv[arg]}&`;
+      }
+    }
+    path += login;
+    // console.log('-- command:' + path);
+    return this.get_request(path); //?? resp.text
+  }
+
+  //---
+  // avoif usage of unsafe 'eval'
+  parse_records_response(js, resp = {}) {
+    /*
+    #expected respose example
+    var record_name0=new Array();
+    var record_size0=new Array();
+    record_name0[0]="20191211095215_010.h264";
+    record_size0[0]=6637827;
+    ...
+    record_name0[99]="20191210174229_010.h264";
+    record_size0[99]=3617800;
+    var record_num0=100;
+    var PageIndex=0;
+    var PageSize=100;
+    var RecordCount=406;
+    var PageCount=5;
+    */
+    if (this.verb > 4) this.print('parse_records_response(%s)' % js)
+    else if (this.verb > 3) this.print('parse_records_response()')
+    let idx = 0;
+    let filename = '';
+    let filesize = 0;
+    const lines = js.split(/\r?\n/);
+    const skipVars = (Object.keys(resp).length !== 0);
+    for (let line of lines) {
+      if (!line) continue;
+      const words = line.split(/[\[, ,=,",;,\]]+/);
+      if (words.length < 3) {
+        if (this.verb > 1) this.print(`Unexpected line, words.length:${words.length} < 3): + ${line}=>${words}`);
+        continue;
+      }
+      let key = words[0];
+      if (key === 'var') {
+        key = words[1];
+        if (resp && !skipVars) {
+          if (words[2] === 'new') {
+            if ((words.length >= 4) && (words[3] === 'Array()')) {
+              resp[key] = [];
+            }
+            else {
+              if (this.verb > 1) this.print('Unexpected line with "new":' + line);
+              continue;
+            }
+          }
+          else {
+            const val = words[2];
+            if (this.verb > 2) this.print(`${key}=${val}`);
+            resp[key] = val;
+          }
+        }
+      }
+      else {
+        idx = parseInt(words[1]);
+        if (!resp[key] || (resp[key].length !== idx)) {
+          if (this.verb > 1) this.print('Unexpected line (element index):' + line);
+          continue;
+        }
+        if (key.startsWith('record_name')){
+          resp[key].push(words[2]);
+        }
+        else if (key.startsWith('record_size')) {
+          resp[key].push(parseInt(words[2]));
+        }
+        else {
+          if (this.verb > 1) this.print('Unexpected line:' + line);
+        }
+      }
+    }
+  }
+
+  fileTime(filename) { // timestamp in ms
+    const date = Date.parse(`${filename.substring(0, 4)}-${filename.substring(4, 6)}-${filename.substring(6, 8)} ${filename.substring(8, 10)}:${filename.substring(10, 12)}:${filename.substring(12, 14)}`);
+    return date ? new Date(date).toJSON() : '';
+  }
+
+  parse_record_files(js, data = null) {
+    /*
+    #expected respose example
+    var record_name0=new Array();
+    var record_size0=new Array();
+    record_name0[0]="20191211095215_010.h264";
+    record_size0[0]=6637827;
+    ...
+    record_name0[99]="20191210174229_010.h264";
+    record_size0[99]=3617800;
+    var record_num0=100;
+    var PageIndex=0;
+    var PageSize=100;
+    var RecordCount=406;
+    var PageCount=5;
+    */
+    if (this.verb > 4) this.print('parse_record_files(%s)' % js)
+    else if (this.verb > 3) this.print('parse_record_files()')
+    if (!data) return;
+    let idx = 0;
+    let filename = '';
+    let filesize = 0;
+    let filetime = 0; // UNIX timestamp in s
+    const skipVars = false; //?? (Object.keys(data).length !== 0);
+    data.records = [];
+    const lines = js.split(/\r?\n/);
+    for (let line of lines) {
+      if (!line) continue;
+      const words = line.split(/[\[, ,=,",;,\]]+/);
+      if (words.length < 3) {
+        if (this.verb > 1) this.print(`Unexpected line, words.length:${words.length} < 3): + ${line}=>${words}`);
+        continue;
+      }
+      let key = words[0];
+      if (key.startsWith('record_name')) {
+        filename = words[2];
+        idx = parseInt(words[1]);
+        if (filename) filetime = this.fileTime(filename);
+      }
+      else if (key.startsWith('record_size')) {
+        if (idx !=parseInt(words[1])) {
+          if (this.verb > 0) this.print(`idx error:${idx}!=${key.subsring(11)})`);
+          continue;
+        }
+        filesize = parseInt(words[2]);
+        if (filename) data.records.push({filename, filesize, filetime});
+      }
+      else if (key === 'var') {
+        if (!skipVars) {
+          if ( words[2] === 'new') continue
+          key = words[1];
+          const val = words[2];
+          if (this.verb > 2) this.print(`${key}=${val}`);
+          data[key] = val.startsWith('"') ? val.subsring(1, val.length - 1) : parseInt(val, 10);
+        }
+      }
+      else {
+        if (this.verb > 1) this.print('Unexpected line:' + line);
+        continue;
+      }
+    }
+  }
+
+  //GET /get_record_file.cgi?loginuse=admin&loginpas=888888&PageIndex=0&PageSize=1000&1639511891221&_=1639511891221 HTTP/1.1
+  //GET /livestream.cgi?user=admin&pwd=888888&streamid=4&filename=20211214202014_010.h264&offset=0 HTTP/1.1
+  //GET /audiostream.cgi?user=admin&pwd=888888&streamid=2&filename= HTTP/1.1
+  //GET /livestream.cgi?user=admin&pwd=888888&streamid=4&filename=20211214201906_010.h264&offset=0 HTTP/1.1
+  //GET /audiostream.cgi?user=admin&pwd=888888&streamid=2&filename= HTTP/1.1
+  async get_record_files(resp = null, pars = null) {
+    if (this.verb > 3) this.print('get_record_files()');
+    const js = await this.command('get_record_file', pars);
+    //console.log('-- get_record_files:' + js);
+    if (js) this.parse_record_files(js, resp);
+  }
+
+  //---
+  async request_record_files(resp, pars = null) {
+    if (this.verb > 3) this.print('request_record_files()');
+    const js = await this.command('get_record_file', pars);
+    console.log('-- get_record_files:' + js);
+    if (js) this.parse_records_response(js, resp);
+  }
+
+  //TODO
+  async get_all_record_files() {
+    if (this.verb > 3) this.print('get_all_record_files()');
+    const vars = {};
+    const records = [];
+    let pageCount = 1;
+    while (pageCount > 0) {
+      records = await this.get_record_files(vars, records); //?? vars
+      if (vars) {
+        pageCount = vars['PageCount']; //?? '0'
+        vars = null;
+      }
+      pageCount -= 1;
+      pageCount = 0; //--
+    }
+    return records;
+  }
+
+  async get_record(filename) {
+    if (this.verb > 3) this.print(`get_record(${filename})`);
+    const login = '?loginuse=' + this.user + '&loginpas=' + this.password;
+    const path = '/record/' + filename + login;
+    return this.get_request_bin(path);
+  }
+
+  async download_record(filename, lfilepath) {
+    if (this.verb > 3) this.print(`download_record(${filename}, ${lfilepath})`);
+    if (this.verb > 2) this.print('download ' + filename);
+    const resp = await this.get_record(filename);
+    if (!resp || (resp.length <= 4)) return 0;
+    const header = resp.readUInt32BE(0);
+    if (header !== 0x55aa15a8) {
+      lfilepath += '.err';
+      if (this.verb > 0) this.print('content error ' + lfilepath);
+      resp.length = 0;
+    }
+    fs.writeFileSync(lfilepath, resp, { mode: 0o666 });
+    return resp.length;
+  }
+
+  async del_file(filename) {
+    if (this.verb > 2) this.print(`del_file ${filename}`);
+    return this.command('del_file', { name: filename });
+  }
+
+  //TODO
+  async del_files(filelist) {
+    if (this.verb > 3) this.print(`del_files(len:${filelist.length})`);
+    for (let filename of filelist) {
+      if (this.verb > 2) this.print('delete ' + filename);
+      await this.del_file(filename);
+    }
+  }
+
+  //TODO
+  async sync_sd(records, dir, count = -1, del = true) {
+    if (this.verb > 3) this.print(`sync_sd(len:${records.length}, ${dir}, ${count})`);
+    for (let record of records) {
+      const {filename, filesize} = record;
+      const lfilepath = path.join(dir, filename);
+      if (fs.existsSync(lfilepath)) {
+        const {size} = fs.statSync(lfilepath);
+        if (filesize === size) {
+          if (this.verb > 2) this.print('delete remote file ' + filename);
+          await this.del_file(filename);
+        }
+        else if (filesize > size) {
+          if (this.verb > 1) this.print('delete local file ' + filename);
+          fs.unlinkSync(lfilepath);
+        }
+        else {
+          if (this.verb > 1) this.print(`file size error ${filename}, lsize:${size}, rsize:${filesize}`);
+          await this.del_file(filename);
+        }
+      }
+      else if (this.download_record(filename, lfilepath)) {
+        if (del) await this.del_file(filename);
+      }
+      if (count > 0) count -= 1;
+      if (count == 0) break;
+    };
+  }
+}
+
+module.exports = VstarcamCgi;
